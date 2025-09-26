@@ -1,5 +1,5 @@
 (async function() {
-    
+    // Test?
   // تابع برای دریافت لیست فالووینگ‌ها
   async function getFollowing(username) {
     let following = [];
