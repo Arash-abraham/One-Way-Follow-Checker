@@ -5,9 +5,6 @@
   // CONFIGURATION
   // ============================================================
 
-  // A Personal Access Token is required for the unfollow feature.
-  // The token must include the "user:follow" scope.
-  // Without a token, read requests are limited to 60/hour per IP.
   const GITHUB_TOKEN = '';
 
   const RESERVED_PATHS = new Set([
@@ -20,6 +17,7 @@
   const BATCH_SIZE = 10;
   const BATCH_DELAY_MS = 200;
   const TAB_DELAY_MS = 180;
+  const UNFOLLOW_DELAY_MS = 300;
 
   // ============================================================
   // NETWORK HELPERS
@@ -27,21 +25,17 @@
 
   function buildHeaders() {
     const headers = { Accept: 'application/vnd.github+json' };
-    if (GITHUB_TOKEN) {
-      headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
-    }
+    if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`;
     return headers;
   }
 
   async function assertNotRateLimited(response) {
     if (response.status !== 403 && response.status !== 429) return;
     if (response.headers.get('X-RateLimit-Remaining') !== '0') return;
-
     const resetHeader = response.headers.get('X-RateLimit-Reset');
     const resetTime = resetHeader
       ? new Date(Number(resetHeader) * 1000).toLocaleTimeString('en-US')
       : 'unknown';
-
     throw new Error(
       `GitHub API rate limit exceeded. Reset at ${resetTime}. ` +
       `Provide a Personal Access Token in GITHUB_TOKEN to increase the limit.`
@@ -51,51 +45,35 @@
   async function getAllPages(username, endpoint) {
     const results = [];
     let page = 1;
-
     while (true) {
       const url =
         `https://api.github.com/users/${encodeURIComponent(username)}/${endpoint}` +
         `?page=${page}&per_page=100`;
-
       const response = await fetch(url, { headers: buildHeaders() });
-
       if (!response.ok) {
         await assertNotRateLimited(response);
         throw new Error(`Failed to fetch ${endpoint} (page ${page}): HTTP ${response.status}`);
       }
-
       const data = await response.json();
       if (!Array.isArray(data) || data.length === 0) break;
-
-      for (const user of data) {
-        results.push(user.login);
-      }
-
+      for (const user of data) results.push(user.login);
       console.log(`Fetched ${endpoint} page ${page} (${results.length} total)`);
-
       const linkHeader = response.headers.get('Link');
       if (!linkHeader || !/rel="next"/.test(linkHeader)) break;
-
       page++;
     }
-
     return results;
   }
 
   async function fetchProfile(username) {
     const url = `https://api.github.com/users/${encodeURIComponent(username)}`;
     const response = await fetch(url, { headers: buildHeaders() });
-
     if (!response.ok) {
-      if (response.status === 404) {
-        return { login: username, error: 'Profile not found' };
-      }
+      if (response.status === 404) return { login: username, error: 'Profile not found' };
       await assertNotRateLimited(response);
       return { login: username, error: `HTTP ${response.status}` };
     }
-
     const data = await response.json();
-
     return {
       login: data.login,
       name: data.name || '',
@@ -114,46 +92,48 @@
     if (!GITHUB_TOKEN) {
       throw new Error('A Personal Access Token with the user:follow scope is required.');
     }
-
     const url = `https://api.github.com/user/following/${encodeURIComponent(username)}`;
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers: buildHeaders(),
-    });
-
+    const response = await fetch(url, { method: 'DELETE', headers: buildHeaders() });
     if (response.status === 204) {
       console.log(`Unfollowed: ${username}`);
       return true;
     }
-
     if (response.status === 404) {
-      throw new Error(
-        'This user is not currently followed, or the token lacks the required scope. ' +
-        'Verify that the token includes user:follow.'
-      );
+      throw new Error('Not currently followed, or the token lacks the required scope.');
     }
-
     if (response.status === 401 || response.status === 403) {
-      throw new Error('Authentication failed. The token is invalid or missing the user:follow scope.');
+      throw new Error('Authentication failed. The token is invalid or missing user:follow.');
     }
-
     await assertNotRateLimited(response);
     throw new Error(`Unfollow request failed: HTTP ${response.status}`);
   }
 
-  // ============================================================
-  // URL PARSING
-  // ============================================================
+  async function followUser(username) {
+    if (!GITHUB_TOKEN) {
+      throw new Error('A Personal Access Token with the user:follow scope is required.');
+    }
+    const url = `https://api.github.com/user/following/${encodeURIComponent(username)}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: { ...buildHeaders(), 'Content-Length': '0' },
+    });
+    if (response.status === 204) {
+      console.log(`Followed: ${username}`);
+      return true;
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('Authentication failed. The token is invalid or missing user:follow.');
+    }
+    await assertNotRateLimited(response);
+    throw new Error(`Follow request failed: HTTP ${response.status}`);
+  }
 
   function extractUsername() {
     const match = window.location.href.match(/^https?:\/\/github\.com\/([^/?#]+)/i);
     if (!match || !match[1]) return null;
-
     const candidate = decodeURIComponent(match[1]);
-
     if (RESERVED_PATHS.has(candidate.toLowerCase())) return null;
     if (!/^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/i.test(candidate)) return null;
-
     return candidate;
   }
 
@@ -163,7 +143,6 @@
 
   function injectStyles() {
     if (document.getElementById('owf-styles')) return;
-
     const style = document.createElement('style');
     style.id = 'owf-styles';
     style.textContent = `
@@ -171,8 +150,7 @@
         position: fixed;
         inset: 0;
         z-index: 2147483647;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(6px);
+        background: rgba(1, 4, 9, 0.75);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -183,7 +161,7 @@
         color: #c9d1d9;
         border: 1px solid #30363d;
         border-radius: 12px;
-        width: 720px;
+        width: 760px;
         max-width: calc(100vw - 32px);
         max-height: calc(100vh - 48px);
         display: flex;
@@ -211,7 +189,7 @@
         border: none;
         color: #8b949e;
         cursor: pointer;
-        font-size: 22px;
+        font-size: 20px;
         line-height: 1;
         padding: 4px 10px;
         border-radius: 6px;
@@ -220,7 +198,60 @@
         background: #30363d;
         color: #f0f6fc;
       }
-      #owf-toolbar {
+      #owf-tabs {
+        display: flex;
+        border-bottom: 1px solid #21262d;
+        background: #0d1117;
+        flex-shrink: 0;
+        padding: 0 20px;
+        gap: 4px;
+      }
+      .owf-tab {
+        background: transparent;
+        border: none;
+        color: #8b949e;
+        padding: 12px 16px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        transition: color 0.15s, border-color 0.15s;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .owf-tab:hover {
+        color: #c9d1d9;
+      }
+      .owf-tab.active {
+        color: #f0f6fc;
+        border-bottom-color: #f78166;
+      }
+      .owf-tab-count {
+        background: #21262d;
+        color: #8b949e;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 1px 7px;
+        border-radius: 10px;
+        min-width: 18px;
+        text-align: center;
+      }
+      .owf-tab.active .owf-tab-count {
+        background: #30363d;
+        color: #f0f6fc;
+      }
+      .owf-panel {
+        display: none;
+        flex: 1;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .owf-panel.active {
+        display: flex;
+      }
+      .owf-toolbar {
         padding: 12px 20px;
         border-bottom: 1px solid #21262d;
         display: flex;
@@ -230,7 +261,7 @@
         background: #0d1117;
         flex-shrink: 0;
       }
-      #owf-search {
+      .owf-search {
         flex: 1;
         min-width: 160px;
         background: #010409;
@@ -241,7 +272,7 @@
         font-size: 13px;
         outline: none;
       }
-      #owf-search:focus {
+      .owf-search:focus {
         border-color: #1f6feb;
       }
       .owf-btn {
@@ -289,16 +320,32 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
-      #owf-list {
+      .owf-btn.danger-outline {
+        background: transparent;
+        border-color: #da3633;
+        color: #f85149;
+      }
+      .owf-btn.danger-outline:hover {
+        background: rgba(218, 54, 51, 0.15);
+        border-color: #f85149;
+      }
+      .owf-btn.danger-outline:disabled {
+        background: #21262d;
+        border-color: #30363d;
+        color: #484f58;
+        cursor: not-allowed;
+      }
+      .owf-list {
         flex: 1;
         overflow-y: auto;
         padding: 4px 0;
-        min-height: 300px;
+        min-height: 280px;
+        max-height: 420px;
       }
-      #owf-list::-webkit-scrollbar {
+      .owf-list::-webkit-scrollbar {
         width: 10px;
       }
-      #owf-list::-webkit-scrollbar-thumb {
+      .owf-list::-webkit-scrollbar-thumb {
         background: #30363d;
         border-radius: 5px;
       }
@@ -313,6 +360,9 @@
       }
       .owf-card:hover {
         background: #161b22;
+      }
+      .owf-card.selected {
+        background: rgba(35, 134, 54, 0.08);
       }
       .owf-card input[type="checkbox"] {
         width: 18px;
@@ -388,12 +438,12 @@
         flex-shrink: 0;
         margin-top: 4px;
       }
-      #owf-empty {
+      .owf-empty {
         padding: 60px 20px;
         text-align: center;
         color: #8b949e;
       }
-      #owf-footer {
+      .owf-footer {
         padding: 14px 20px;
         border-top: 1px solid #21262d;
         display: flex;
@@ -402,13 +452,19 @@
         gap: 12px;
         background: #161b22;
         flex-shrink: 0;
+        flex-wrap: wrap;
       }
-      #owf-count {
+      .owf-count {
         color: #8b949e;
         font-size: 13px;
       }
-      #owf-count strong {
+      .owf-count strong {
         color: #3fb950;
+      }
+      .owf-footer-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
       }
       .owf-toast {
         position: fixed;
@@ -423,6 +479,7 @@
         z-index: 2147483648;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
         animation: owf-fade 0.3s ease;
+        max-width: 90vw;
       }
       .owf-toast.warn {
         background: #9e6a03;
@@ -431,14 +488,8 @@
         background: #da3633;
       }
       @keyframes owf-fade {
-        from {
-          opacity: 0;
-          transform: translate(-50%, 10px);
-        }
-        to {
-          opacity: 1;
-          transform: translate(-50%, 0);
-        }
+        from { opacity: 0; transform: translate(-50%, 10px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
       }
       .owf-progress {
         height: 3px;
@@ -471,16 +522,11 @@
   function openSelectedTabs(urls, onComplete) {
     let opened = 0;
     let blocked = 0;
-
     urls.forEach((url, index) => {
       setTimeout(() => {
         const newWindow = window.open(url, '_blank');
-        if (newWindow) {
-          opened++;
-        } else {
-          blocked++;
-        }
-
+        if (newWindow) opened++;
+        else blocked++;
         if (index === urls.length - 1) {
           setTimeout(() => {
             if (blocked > 0) {
@@ -502,7 +548,7 @@
   // MODAL
   // ============================================================
 
-  function buildModal(users, profilesMap, onOpen) {
+  function buildModal(users1, users2, profilesMap) {
     injectStyles();
 
     const overlay = document.createElement('div');
@@ -514,36 +560,107 @@
     // Header
     const header = document.createElement('div');
     header.id = 'owf-header';
-
     const title = document.createElement('h2');
-    title.textContent = `One-way follows (${users.length})`;
+    title.textContent = 'Follow analysis';
     header.appendChild(title);
-
     const closeButton = document.createElement('button');
     closeButton.id = 'owf-close';
     closeButton.textContent = '\u2715';
     closeButton.addEventListener('click', () => overlay.remove());
     header.appendChild(closeButton);
 
+    // Tabs
+    const tabs = document.createElement('div');
+    tabs.id = 'owf-tabs';
+
+    function makeTab(label, count, isActive) {
+      const tab = document.createElement('button');
+      tab.className = 'owf-tab' + (isActive ? ' active' : '');
+      const labelSpan = document.createElement('span');
+      labelSpan.textContent = label;
+      tab.appendChild(labelSpan);
+      const countSpan = document.createElement('span');
+      countSpan.className = 'owf-tab-count';
+      countSpan.textContent = String(count);
+      tab.appendChild(countSpan);
+      return tab;
+    }
+
+    const tab1 = makeTab('Not following back', users1.length, true);
+    const tab2 = makeTab('Not followed back', users2.length, false);
+    tabs.appendChild(tab1);
+    tabs.appendChild(tab2);
+
+    // Panel 1 (unfollow mode)
+    const panel1 = buildPanel('unfollow', users1, profilesMap, tab1, true);
+    // Panel 2 (follow mode)
+    const panel2 = buildPanel('follow', users2, profilesMap, tab2, false);
+
+    function activate(which) {
+      const isTab1 = which === 1;
+      tab1.classList.toggle('active', isTab1);
+      tab2.classList.toggle('active', !isTab1);
+      panel1.panel.classList.toggle('active', isTab1);
+      panel2.panel.classList.toggle('active', !isTab1);
+    }
+    tab1.addEventListener('click', () => activate(1));
+    tab2.addEventListener('click', () => activate(2));
+
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) overlay.remove();
+    });
+    document.addEventListener('keydown', function onEscape(event) {
+      if (event.key === 'Escape') {
+        overlay.remove();
+        document.removeEventListener('keydown', onEscape);
+      }
+    });
+
+    modal.appendChild(header);
+    modal.appendChild(tabs);
+    modal.appendChild(panel1.panel);
+    modal.appendChild(panel2.panel);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    return {
+      updateProfile(name, profile) {
+        profilesMap.set(name, profile);
+        panel1.updateProfile(name, profile);
+        panel2.updateProfile(name, profile);
+      },
+      setProgress(loaded, total) {
+        panel1.setProgress(loaded, total);
+        panel2.setProgress(loaded, total);
+      },
+    };
+  }
+
+  // ============================================================
+  // PANEL
+  // ============================================================
+
+  function buildPanel(mode, users, profilesMap, tabElement, isActive) {
+    const panel = document.createElement('div');
+    panel.className = 'owf-panel' + (isActive ? ' active' : '');
+
     // Toolbar
     const toolbar = document.createElement('div');
-    toolbar.id = 'owf-toolbar';
-
+    toolbar.className = 'owf-toolbar';
     const searchInput = document.createElement('input');
-    searchInput.id = 'owf-search';
+    searchInput.className = 'owf-search';
     searchInput.type = 'text';
     searchInput.placeholder = 'Search by username or name';
     toolbar.appendChild(searchInput);
-
     const selectAllButton = document.createElement('button');
     selectAllButton.className = 'owf-btn';
     selectAllButton.textContent = 'Select All';
     toolbar.appendChild(selectAllButton);
-
     const selectNoneButton = document.createElement('button');
     selectNoneButton.className = 'owf-btn';
-    selectNoneButton.textContent = 'Select None';
+    selectNoneButton.textContent = 'Clear';
     toolbar.appendChild(selectNoneButton);
+    panel.appendChild(toolbar);
 
     // Progress bar
     const progressContainer = document.createElement('div');
@@ -551,28 +668,40 @@
     const progressBar = document.createElement('div');
     progressBar.className = 'owf-progress-bar';
     progressContainer.appendChild(progressBar);
+    panel.appendChild(progressContainer);
 
-    // List container
+    // List
     const list = document.createElement('div');
-    list.id = 'owf-list';
+    list.className = 'owf-list';
+    panel.appendChild(list);
 
     // Footer
     const footer = document.createElement('div');
-    footer.id = 'owf-footer';
-
+    footer.className = 'owf-footer';
     const countLabel = document.createElement('div');
-    countLabel.id = 'owf-count';
+    countLabel.className = 'owf-count';
     footer.appendChild(countLabel);
+    const footerActions = document.createElement('div');
+    footerActions.className = 'owf-footer-actions';
+
+    const actionButton = document.createElement('button');
+    actionButton.className = 'owf-btn danger-outline';
+    actionButton.disabled = true;
+    footerActions.appendChild(actionButton);
 
     const openButton = document.createElement('button');
     openButton.className = 'owf-btn primary';
     openButton.textContent = 'Open Selected';
     openButton.disabled = true;
-    footer.appendChild(openButton);
+    footerActions.appendChild(openButton);
+
+    footer.appendChild(footerActions);
+    panel.appendChild(footer);
 
     // State
     const selectedSet = new Set();
     const removedSet = new Set();
+    let isBulkRunning = false;
 
     function getActiveUsers() {
       return users.filter((username) => !removedSet.has(username));
@@ -585,8 +714,31 @@
       }
       const activeTotal = getActiveUsers().length;
       countLabel.textContent = `Selected: ${count} of ${activeTotal}`;
-      openButton.disabled = count === 0;
+      const busy = isBulkRunning;
+      openButton.disabled = count === 0 || busy;
       openButton.textContent = count > 0 ? `Open ${count} Tab(s)` : 'Open Selected';
+      actionButton.disabled = count === 0 || busy;
+      if (mode === 'unfollow') {
+        actionButton.textContent = count > 0 ? `Unfollow ${count}` : 'Unfollow Selected';
+      } else {
+        actionButton.textContent = count > 0 ? `Follow ${count}` : 'Follow Selected';
+      }
+      // Update tab count badge
+      if (tabElement) {
+        tabElement.querySelector('.owf-tab-count').textContent = String(activeTotal);
+      }
+    }
+
+    function createMetaSpan(label, value) {
+      const span = document.createElement('span');
+      span.innerHTML = `${label}: <strong>${value}</strong>`;
+      return span;
+    }
+
+    function createMetaTextSpan(label, value) {
+      const span = document.createElement('span');
+      span.textContent = `${label}: ${value}`;
+      return span;
     }
 
     function renderList(filter = '') {
@@ -598,11 +750,10 @@
         const profile = profilesMap.get(username) || { login: username, loading: true };
         const haystack = `${username} ${profile.name || ''}`.toLowerCase();
         if (query && !haystack.includes(query)) continue;
-
         shownCount++;
 
         const card = document.createElement('div');
-        card.className = 'owf-card';
+        card.className = 'owf-card' + (selectedSet.has(username) ? ' selected' : '');
         card.dataset.username = username;
 
         const checkbox = document.createElement('input');
@@ -612,6 +763,7 @@
         checkbox.addEventListener('change', () => {
           if (checkbox.checked) selectedSet.add(username);
           else selectedSet.delete(username);
+          card.classList.toggle('selected', checkbox.checked);
           updateCountLabel();
         });
         card.appendChild(checkbox);
@@ -640,7 +792,7 @@
         if (profile.loading) {
           const loading = document.createElement('div');
           loading.className = 'owf-loading';
-          loading.textContent = 'Loading profile';
+          loading.textContent = 'Loading profile...';
           info.appendChild(loading);
         } else if (profile.error) {
           const error = document.createElement('div');
@@ -654,25 +806,19 @@
             nameElement.textContent = profile.name;
             info.appendChild(nameElement);
           }
-
           if (profile.bio) {
             const bioElement = document.createElement('div');
             bioElement.className = 'owf-bio';
             bioElement.textContent = profile.bio;
             info.appendChild(bioElement);
           }
-
           const meta = document.createElement('div');
           meta.className = 'owf-meta';
           meta.appendChild(createMetaSpan('Repos', profile.publicRepos));
           meta.appendChild(createMetaSpan('Followers', profile.followers));
           meta.appendChild(createMetaSpan('Following', profile.following));
-          if (profile.location) {
-            meta.appendChild(createMetaTextSpan('Location', profile.location));
-          }
-          if (profile.company) {
-            meta.appendChild(createMetaTextSpan('Company', profile.company));
-          }
+          if (profile.location) meta.appendChild(createMetaTextSpan('Location', profile.location));
+          if (profile.company) meta.appendChild(createMetaTextSpan('Company', profile.company));
           info.appendChild(meta);
         }
 
@@ -680,41 +826,39 @@
 
         const actions = document.createElement('div');
         actions.className = 'owf-actions';
-
-        const unfollowButton = document.createElement('button');
-        unfollowButton.className = 'owf-btn danger';
-        unfollowButton.textContent = 'Unfollow';
-        unfollowButton.title = GITHUB_TOKEN
-          ? 'Unfollow this user via the GitHub API'
+        const singleButton = document.createElement('button');
+        singleButton.className = 'owf-btn danger';
+        singleButton.textContent = mode === 'unfollow' ? 'Unfollow' : 'Follow';
+        singleButton.title = GITHUB_TOKEN
+          ? (mode === 'unfollow' ? 'Unfollow this user via the GitHub API' : 'Follow this user via the GitHub API')
           : 'Requires a Personal Access Token with the user:follow scope';
-        unfollowButton.addEventListener('click', async (event) => {
+        singleButton.addEventListener('click', async (event) => {
           event.stopPropagation();
-          unfollowButton.disabled = true;
-          unfollowButton.textContent = '...';
+          singleButton.disabled = true;
+          singleButton.textContent = '...';
           try {
-            await unfollowUser(username);
+            if (mode === 'unfollow') await unfollowUser(username);
+            else await followUser(username);
             removedSet.add(username);
             selectedSet.delete(username);
-            showToast(`Unfollowed ${username}`);
+            showToast(`${mode === 'unfollow' ? 'Unfollowed' : 'Followed'} ${username}`);
             renderList(searchInput.value);
             updateCountLabel();
           } catch (error) {
-            showToast(error.message || 'Unfollow failed', 'error');
-            unfollowButton.disabled = false;
-            unfollowButton.textContent = 'Unfollow';
+            showToast(error.message || 'Action failed', 'error');
+            singleButton.disabled = false;
+            singleButton.textContent = mode === 'unfollow' ? 'Unfollow' : 'Follow';
           }
         });
-        actions.appendChild(unfollowButton);
-
+        actions.appendChild(singleButton);
         card.appendChild(actions);
 
         card.addEventListener('click', (event) => {
-          if (event.target.closest('a') || event.target.closest('button') || event.target === checkbox) {
-            return;
-          }
+          if (event.target.closest('a') || event.target.closest('button') || event.target === checkbox) return;
           checkbox.checked = !checkbox.checked;
           if (checkbox.checked) selectedSet.add(username);
           else selectedSet.delete(username);
+          card.classList.toggle('selected', checkbox.checked);
           updateCountLabel();
         });
 
@@ -723,22 +867,12 @@
 
       if (shownCount === 0) {
         const empty = document.createElement('div');
-        empty.id = 'owf-empty';
-        empty.textContent = 'No results';
+        empty.className = 'owf-empty';
+        empty.textContent = query
+          ? 'No accounts match your search.'
+          : (mode === 'unfollow' ? 'No one-way follows found.' : 'No one-way followers found.');
         list.appendChild(empty);
       }
-    }
-
-    function createMetaSpan(label, value) {
-      const span = document.createElement('span');
-      span.innerHTML = `${label}: <strong>${value}</strong>`;
-      return span;
-    }
-
-    function createMetaTextSpan(label, value) {
-      const span = document.createElement('span');
-      span.textContent = `${label}: ${value}`;
-      return span;
     }
 
     selectAllButton.addEventListener('click', () => {
@@ -746,9 +880,7 @@
       for (const username of getActiveUsers()) {
         const profile = profilesMap.get(username) || { login: username };
         const haystack = `${username} ${profile.name || ''}`.toLowerCase();
-        if (!query || haystack.includes(query)) {
-          selectedSet.add(username);
-        }
+        if (!query || haystack.includes(query)) selectedSet.add(username);
       }
       renderList(searchInput.value);
       updateCountLabel();
@@ -765,57 +897,78 @@
     openButton.addEventListener('click', () => {
       const selected = getActiveUsers().filter((username) => selectedSet.has(username));
       if (selected.length === 0) return;
-
       const urls = selected.map((username) => {
         const profile = profilesMap.get(username);
         return profile && profile.htmlUrl ? profile.htmlUrl : `https://github.com/${username}`;
       });
-
       openButton.disabled = true;
       openButton.textContent = 'Opening...';
-
-      onOpen(urls, (result) => {
-        if (result.blocked === 0) {
-          overlay.remove();
-        } else {
-          openButton.disabled = false;
-          openButton.textContent = 'Retry';
-        }
+      openSelectedTabs(urls, (result) => {
+        openButton.disabled = false;
+        openButton.textContent = result.blocked === 0 ? 'Open Selected' : 'Retry';
       });
     });
 
-    overlay.addEventListener('click', (event) => {
-      if (event.target === overlay) overlay.remove();
-    });
+    actionButton.addEventListener('click', async () => {
+      if (isBulkRunning) return;
+      const selected = getActiveUsers().filter((username) => selectedSet.has(username));
+      if (selected.length === 0) return;
 
-    document.addEventListener('keydown', function onEscape(event) {
-      if (event.key === 'Escape') {
-        overlay.remove();
-        document.removeEventListener('keydown', onEscape);
+      const verb = mode === 'unfollow' ? 'Unfollow' : 'Follow';
+      const confirmed = window.confirm(
+        `${verb} ${selected.length} account(s)? This cannot be undone from this dialog.`
+      );
+      if (!confirmed) return;
+
+      isBulkRunning = true;
+      actionButton.disabled = true;
+      openButton.disabled = true;
+      actionButton.textContent = `${verb}ing...`;
+
+      let succeeded = 0;
+      let failed = 0;
+
+      for (let index = 0; index < selected.length; index++) {
+        const username = selected[index];
+        try {
+          if (mode === 'unfollow') await unfollowUser(username);
+          else await followUser(username);
+          succeeded++;
+          removedSet.add(username);
+          selectedSet.delete(username);
+        } catch (error) {
+          failed++;
+          console.warn(`${verb} failed for ${username}: ${error.message}`);
+        }
+        countLabel.textContent = `${verb}ing ${index + 1} of ${selected.length} (ok: ${succeeded}, failed: ${failed})`;
+        renderList(searchInput.value);
+        if (index < selected.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, UNFOLLOW_DELAY_MS));
+        }
+      }
+
+      isBulkRunning = false;
+      renderList(searchInput.value);
+      updateCountLabel();
+
+      if (failed === 0) {
+        showToast(`${verb}ed ${succeeded} account(s).`);
+      } else {
+        showToast(`${verb}ed ${succeeded}, failed ${failed}. See console.`, 'warn');
       }
     });
-
-    modal.appendChild(header);
-    modal.appendChild(toolbar);
-    modal.appendChild(progressContainer);
-    modal.appendChild(list);
-    modal.appendChild(footer);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
 
     renderList();
     updateCountLabel();
 
     return {
-      updateProfile(username, profile) {
-        profilesMap.set(username, profile);
-        if (!removedSet.has(username)) renderList(searchInput.value);
-      },
+      panel,
       setProgress(loaded, total) {
         progressBar.style.width = (total > 0 ? (loaded / total) * 100 : 0) + '%';
       },
-      remove() {
-        overlay.remove();
+      updateProfile(username, profile) {
+        profilesMap.set(username, profile);
+        if (!removedSet.has(username)) renderList(searchInput.value);
       },
     };
   }
@@ -832,12 +985,10 @@
       return;
     }
 
-    console.log(`Checking one-way follows for: ${username}`);
+    console.log(`Analyzing follows for: ${username}`);
     if (!GITHUB_TOKEN) {
       console.warn(
-        'No Personal Access Token provided. ' +
-        'Unauthenticated requests are limited to 60 per hour, ' +
-        'and the unfollow feature will not work.'
+        'No Personal Access Token provided. Unauthenticated requests are limited to 60 per hour, and follow/unfollow actions will not work.'
       );
     }
 
@@ -849,37 +1000,45 @@
     const followers = await getAllPages(username, 'followers');
     console.log(`Follower count: ${followers.length}`);
 
-    const followerSet = new Set(followers.map((name) => name.toLowerCase()));
-    const oneWayFollows = following
-      .filter((name) => !followerSet.has(name.toLowerCase()))
+    const followingSet = new Set(following.map((name) => name.toLowerCase()));
+    const followersSet = new Set(followers.map((name) => name.toLowerCase()));
+
+    const notFollowingBack = following
+      .filter((name) => !followersSet.has(name.toLowerCase()))
       .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 
-    console.log(`One-way follow count: ${oneWayFollows.length}`);
-    window.oneWayFollowingResults = oneWayFollows;
+    const notFollowedBack = followers
+      .filter((name) => !followingSet.has(name.toLowerCase()))
+      .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 
-    if (oneWayFollows.length === 0) {
-      showToast('No one-way follows found.');
+    console.log(`Not following back: ${notFollowingBack.length}`);
+    console.log(`Not followed back: ${notFollowedBack.length}`);
+
+    window.oneWayFollowingResults = notFollowingBack;
+    window.oneWayFollowersResults = notFollowedBack;
+
+    if (notFollowingBack.length === 0 && notFollowedBack.length === 0) {
+      showToast('No one-way follows or one-way followers found.');
       return;
     }
 
+    // Shared profiles map across both lists
     const profilesMap = new Map();
-    for (const name of oneWayFollows) {
+    const allUsers = new Set([...notFollowingBack, ...notFollowedBack]);
+    for (const name of allUsers) {
       profilesMap.set(name, { login: name, loading: true });
     }
 
-    const modalHelpers = buildModal(oneWayFollows, profilesMap, (urls, onComplete) => {
-      console.log(`Opening ${urls.length} tab(s)`);
-      openSelectedTabs(urls, onComplete);
-    });
+    const modalHelpers = buildModal(notFollowingBack, notFollowedBack, profilesMap);
 
     console.log('Fetching full profiles');
+    const allUsersArray = Array.from(allUsers);
     let loaded = 0;
     let failed = 0;
 
-    for (let index = 0; index < oneWayFollows.length; index += BATCH_SIZE) {
-      const batch = oneWayFollows.slice(index, index + BATCH_SIZE);
+    for (let index = 0; index < allUsersArray.length; index += BATCH_SIZE) {
+      const batch = allUsersArray.slice(index, index + BATCH_SIZE);
       const results = await Promise.allSettled(batch.map((name) => fetchProfile(name)));
-
       results.forEach((result, offset) => {
         const name = batch[offset];
         if (result.status === 'fulfilled') {
@@ -890,20 +1049,16 @@
           failed++;
         }
         modalHelpers.updateProfile(name, profilesMap.get(name));
-        modalHelpers.setProgress(loaded + failed, oneWayFollows.length);
+        modalHelpers.setProgress(loaded + failed, allUsersArray.length);
       });
-
-      console.log(`Profiles loaded: ${loaded + failed}/${oneWayFollows.length} (${failed} failed)`);
-
-      if (index + BATCH_SIZE < oneWayFollows.length) {
+      console.log(`Profiles loaded: ${loaded + failed}/${allUsersArray.length} (${failed} failed)`);
+      if (index + BATCH_SIZE < allUsersArray.length) {
         await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
       }
     }
 
     console.log(`Profile loading complete. Loaded: ${loaded}, failed: ${failed}`);
-    if (failed > 0) {
-      showToast(`${loaded} profiles loaded, ${failed} failed.`, 'warn');
-    }
+    if (failed > 0) showToast(`${loaded} profiles loaded, ${failed} failed.`, 'warn');
   } catch (error) {
     console.error(error.message || error);
     showToast(error.message || 'An unexpected error occurred.', 'error');
