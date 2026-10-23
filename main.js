@@ -652,13 +652,32 @@
     searchInput.type = 'text';
     searchInput.placeholder = 'Search by username or name';
     toolbar.appendChild(searchInput);
+    const filterButton = document.createElement('button');
+    filterButton.className = 'owf-btn';
+    filterButton.type = "button";
+    filterButton.setAttribute('aria-label', 'Filter');
+    filterButton.title = 'Filter';
+
+    filterButton.innerHTML = `
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+        <line x1="2" y1="4" x2="14" y2="4"/>
+        <line x1="2" y1="8" x2="14" y2="8"/>
+        <line x1="2" y1="12" x2="14" y2="12"/>
+        <circle cx="5" cy="4" r="1.75" fill="currentColor" stroke="none"/>
+        <circle cx="11" cy="8" r="1.75" fill="currentColor" stroke="none"/>
+        <circle cx="7" cy="12" r="1.75" fill="currentColor" stroke="none"/>
+      </svg>
+    `;
+    toolbar.appendChild(filterButton);
     const selectAllButton = document.createElement('button');
     selectAllButton.className = 'owf-btn';
     selectAllButton.textContent = 'Select All';
     toolbar.appendChild(selectAllButton);
+    
     const selectNoneButton = document.createElement('button');
     selectNoneButton.className = 'owf-btn';
-    selectNoneButton.textContent = 'Clear';
+    selectNoneButton.textContent = 'Clear';        
+
     toolbar.appendChild(selectNoneButton);
     panel.appendChild(toolbar);
 
